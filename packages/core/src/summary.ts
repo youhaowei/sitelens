@@ -8,7 +8,14 @@ import type {
   ScoreBreakdown,
   ScoreDeduction,
   ScoreBonus,
+  CoreWebVitalsData,
+  MetricData,
+  MetricStatus,
+  PerformanceMetricKey,
+  PerformanceRecommendation,
+  DiagnosticSummary,
 } from "@sitelens/shared/types";
+import { CWV_THRESHOLDS } from "@sitelens/shared/types";
 import { sortIssuesBySeverity, countBySeverity } from "./recommendations";
 
 const SCORE_WEIGHTS = {
@@ -522,25 +529,6 @@ function calculateEcommerceScore(report: AuditReport): number {
   return Math.min(100, score);
 }
 
-function getGrade(score: number): ScoreBreakdown["grade"] {
-  if (score >= 90) return "A";
-  if (score >= 80) return "B";
-  if (score >= 70) return "C";
-  if (score >= 60) return "D";
-  return "F";
-}
-
-function getGradeExplanation(grade: ScoreBreakdown["grade"]): string {
-  const explanations: Record<ScoreBreakdown["grade"], string> = {
-    A: "Excellent! This area is performing very well.",
-    B: "Good performance with minor room for improvement.",
-    C: "Average performance. Some improvements recommended.",
-    D: "Below average. Several issues need attention.",
-    F: "Needs significant work. Multiple critical issues found.",
-  };
-  return explanations[grade];
-}
-
 function generateDetailedScores(report: AuditReport): DetailedScores {
   const breakdown: ScoreBreakdown[] = [];
 
@@ -561,58 +549,242 @@ function generateDetailedScores(report: AuditReport): DetailedScores {
   };
 }
 
+function getMetricStatus(metric: PerformanceMetricKey, value: number): MetricStatus {
+  const threshold = CWV_THRESHOLDS[metric];
+  if (value <= threshold.good) return "good";
+  if (value <= threshold.poor) return "needs-improvement";
+  return "poor";
+}
+
+function formatMetricValue(metric: PerformanceMetricKey, value: number): string {
+  if (metric === "cls") return value.toFixed(3);
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}s`;
+  return `${Math.round(value)}ms`;
+}
+
+const LIGHTHOUSE_WEIGHTS: Record<PerformanceMetricKey, number> = {
+  tbt: 0.30,
+  lcp: 0.25,
+  cls: 0.25,
+  fcp: 0.10,
+  si: 0.10,
+  ttfb: 0,
+  tti: 0,
+};
+
+function calculateMetricScore(metric: PerformanceMetricKey, value: number): number {
+  const threshold = CWV_THRESHOLDS[metric];
+  if (value <= threshold.good) {
+    const ratio = value / threshold.good;
+    return Math.round(90 + (1 - ratio) * 10);
+  }
+  if (value >= threshold.poor) {
+    const overage = (value - threshold.poor) / threshold.poor;
+    return Math.max(0, Math.round(49 - overage * 49));
+  }
+  const range = threshold.poor - threshold.good;
+  const position = (value - threshold.good) / range;
+  return Math.round(90 - position * 40);
+}
+
+function createMetricData(
+  metric: PerformanceMetricKey,
+  value: number | undefined,
+  label: string,
+  description: string
+): MetricData | null {
+  if (value === undefined) return null;
+  
+  const status = getMetricStatus(metric, value);
+  const score = calculateMetricScore(metric, value);
+  const weight = LIGHTHOUSE_WEIGHTS[metric];
+  const weightedScore = Math.round(score * weight * 100) / 100;
+  
+  return {
+    value,
+    score,
+    weight,
+    weightedScore,
+    status,
+    threshold: CWV_THRESHOLDS[metric],
+    displayValue: formatMetricValue(metric, value),
+    label,
+    description,
+  };
+}
+
+function generatePerformanceRecommendations(
+  lcp: MetricData | null,
+  cls: MetricData | null,
+  tbt: MetricData | null
+): PerformanceRecommendation[] {
+  const recommendations: PerformanceRecommendation[] = [];
+  
+  if (cls && cls.status !== "good") {
+    const ratio = cls.value / cls.threshold.good;
+    recommendations.push({
+      id: "fix-cls",
+      metric: "cls",
+      priority: cls.status === "poor" ? 1 : 2,
+      impact: cls.status === "poor" ? "high" : "medium",
+      title: "Fix Layout Shifts",
+      description: `Your CLS of ${cls.displayValue} is ${ratio.toFixed(1)}x the target threshold. Elements shift around as the page loads, frustrating users.`,
+      howToFix: "Set explicit width and height on images, videos, and embeds. Avoid inserting content above existing content. Use CSS transform for animations.",
+      learnMoreUrl: "https://web.dev/cls/",
+      ratio,
+    });
+  }
+  
+  if (tbt && tbt.status !== "good") {
+    const ratio = tbt.value / tbt.threshold.good;
+    recommendations.push({
+      id: "fix-tbt",
+      metric: "tbt",
+      priority: tbt.status === "poor" ? 1 : 3,
+      impact: tbt.status === "poor" ? "high" : "medium",
+      title: "Reduce Blocking Time",
+      description: `Your TBT of ${tbt.displayValue} makes the page feel sluggish. Users can't interact until JavaScript finishes executing.`,
+      howToFix: "Break up long JavaScript tasks, defer non-critical scripts, remove unused code, and consider using a web worker for heavy computations.",
+      learnMoreUrl: "https://web.dev/tbt/",
+      ratio,
+    });
+  }
+  
+  if (lcp && lcp.status !== "good") {
+    const ratio = lcp.value / lcp.threshold.good;
+    recommendations.push({
+      id: "fix-lcp",
+      metric: "lcp",
+      priority: lcp.status === "poor" ? 1 : 4,
+      impact: lcp.status === "poor" ? "high" : "medium",
+      title: "Speed Up Content Loading",
+      description: `Your LCP of ${lcp.displayValue} means users wait too long to see the main content. This increases bounce rates.`,
+      howToFix: "Optimize and preload your largest image, use a CDN, enable caching, and reduce server response time (TTFB).",
+      learnMoreUrl: "https://web.dev/lcp/",
+      ratio,
+    });
+  }
+  
+  return recommendations.sort((a, b) => a.priority - b.priority);
+}
+
 function generatePerformanceBreakdown(report: AuditReport): ScoreBreakdown {
   const score = report.details?.fundamentals?.scores?.performance || 0;
   const metrics = report.details?.fundamentals?.metrics;
-  const deductions: ScoreDeduction[] = [];
-  const bonuses: ScoreBonus[] = [];
   const tips: string[] = [];
 
-  if (metrics?.lcp && metrics.lcp > 2500) {
-    deductions.push({
-      points: metrics.lcp > 4000 ? 25 : 15,
-      reason: "Slow Largest Contentful Paint (LCP)",
-      explanation: `Your main content takes ${(metrics.lcp / 1000).toFixed(1)} seconds to appear. Visitors see a blank or incomplete page during this time, which feels slow and frustrating.`,
-      howToFix: "Optimize your largest images, use a faster web host, or enable caching to speed up content delivery.",
-      learnMoreUrl: "https://web.dev/lcp/",
-    });
-  } else if (metrics?.lcp) {
-    bonuses.push({
-      points: 10,
-      reason: "Fast content loading",
-      explanation: "Your main content appears quickly, giving visitors a good first impression.",
-    });
-  }
+  const lcp = createMetricData(
+    "lcp",
+    metrics?.lcp,
+    "Largest Contentful Paint",
+    "Time until the main content is visible"
+  );
+  
+  const cls = createMetricData(
+    "cls",
+    metrics?.cls,
+    "Cumulative Layout Shift",
+    "How much the page layout shifts during loading"
+  );
+  
+  const tbt = createMetricData(
+    "tbt",
+    metrics?.tbt,
+    "Total Blocking Time",
+    "Time the page is unresponsive to user input"
+  );
+  
+  const fcp = createMetricData(
+    "fcp",
+    metrics?.fcp,
+    "First Contentful Paint",
+    "Time until first content appears"
+  );
+  
+  const si = createMetricData(
+    "si",
+    metrics?.si,
+    "Speed Index",
+    "How quickly content is visually displayed"
+  );
+  
+  const ttfb = createMetricData(
+    "ttfb",
+    metrics?.ttfb,
+    "Time to First Byte",
+    "Server response time"
+  );
 
-  if (metrics?.cls && metrics.cls > 0.1) {
-    deductions.push({
-      points: metrics.cls > 0.25 ? 20 : 10,
-      reason: "Layout shifts detected",
-      explanation: `Elements on your page move around as it loads (score: ${metrics.cls.toFixed(3)}). This is annoying for visitors trying to click buttons or read content.`,
-      howToFix: "Set explicit sizes for images and ads, and avoid inserting content above existing content.",
-      learnMoreUrl: "https://web.dev/cls/",
-    });
-  }
+  const tti = createMetricData(
+    "tti",
+    metrics?.tti,
+    "Time to Interactive",
+    "Time until the page is fully interactive"
+  );
 
-  if (metrics?.tbt && metrics.tbt > 300) {
-    deductions.push({
-      points: metrics.tbt > 600 ? 20 : 10,
-      reason: "Page is slow to respond",
-      explanation: `Your page takes ${Math.round(metrics.tbt)}ms before it responds to clicks and taps. This makes the site feel sluggish.`,
-      howToFix: "Reduce JavaScript code, break up long tasks, and defer non-essential scripts.",
-      learnMoreUrl: "https://web.dev/tbt/",
+  const coreMetrics = [lcp, cls, tbt].filter((m): m is MetricData => m !== null);
+  const passingCount = coreMetrics.filter(m => m.status === "good").length;
+  const failingCount = coreMetrics.filter(m => m.status !== "good").length;
+  
+  const recommendations = generatePerformanceRecommendations(lcp, cls, tbt);
+  
+  const diag = report.details?.fundamentals?.diagnostics;
+  const diagnosticSummaries: DiagnosticSummary[] = [];
+  
+  if (diag?.totalByteWeight) {
+    const mb = diag.totalByteWeight / 1024 / 1024;
+    diagnosticSummaries.push({
+      label: "Total Page Weight",
+      value: mb >= 1 ? `${mb.toFixed(1)} MB` : `${(diag.totalByteWeight / 1024).toFixed(0)} KB`,
+      status: mb > 3 ? "poor" : mb > 1.5 ? "needs-improvement" : "good",
     });
   }
+  
+  if (diag?.mainThreadTotalTime) {
+    const sec = diag.mainThreadTotalTime / 1000;
+    diagnosticSummaries.push({
+      label: "Main Thread Work",
+      value: `${sec.toFixed(1)}s`,
+      status: sec > 4 ? "poor" : sec > 2 ? "needs-improvement" : "good",
+    });
+  }
+  
+  if (diag?.thirdPartyTotalBlockingTime !== undefined && diag.thirdPartyTotalBlockingTime > 0) {
+    diagnosticSummaries.push({
+      label: "3rd Party Blocking",
+      value: `${diag.thirdPartyTotalBlockingTime}ms`,
+      status: diag.thirdPartyTotalBlockingTime > 250 ? "poor" : diag.thirdPartyTotalBlockingTime > 150 ? "needs-improvement" : "good",
+    });
+  }
+  
+  if (diag?.networkTotalRequests) {
+    diagnosticSummaries.push({
+      label: "Network Requests",
+      value: `${diag.networkTotalRequests}`,
+      status: diag.networkTotalRequests > 100 ? "poor" : diag.networkTotalRequests > 50 ? "needs-improvement" : "good",
+    });
+  }
+  
+  const coreWebVitals: CoreWebVitalsData = {
+    lcp,
+    cls,
+    tbt,
+    fcp,
+    si,
+    ttfb,
+    tti,
+    passingCount,
+    failingCount,
+    recommendations,
+    diagnosticSummaries: diagnosticSummaries.length > 0 ? diagnosticSummaries : undefined,
+  };
 
   if (score < 50) {
     tips.push("Consider using a Content Delivery Network (CDN) to serve your content faster worldwide.");
     tips.push("Compress and resize images before uploading them to your website.");
-  }
-  if (score >= 50 && score < 80) {
+  } else if (score < 80) {
     tips.push("Enable browser caching so returning visitors load your site faster.");
   }
-
-  const grade = getGrade(score);
 
   return {
     category: "performance",
@@ -623,11 +795,11 @@ function generatePerformanceBreakdown(report: AuditReport): ScoreBreakdown {
     weight: SCORE_WEIGHTS.performance,
     weightExplanation: "Performance accounts for 25% of your overall score because speed directly impacts visitor satisfaction and search rankings.",
     baseScore: 100,
-    deductions,
-    bonuses,
+    deductions: [],
+    bonuses: [],
     tips,
-    grade,
-    gradeExplanation: getGradeExplanation(grade),
+
+    coreWebVitals,
   };
 }
 
@@ -779,8 +951,6 @@ function generateSeoBreakdown(report: AuditReport): ScoreBreakdown {
   }
 
   score = Math.max(0, Math.min(100, score));
-  const grade = getGrade(score);
-
   return {
     category: "seo",
     categoryLabel: "SEO",
@@ -793,8 +963,7 @@ function generateSeoBreakdown(report: AuditReport): ScoreBreakdown {
     deductions,
     bonuses,
     tips,
-    grade,
-    gradeExplanation: getGradeExplanation(grade),
+
   };
 }
 
@@ -834,8 +1003,6 @@ function generateAccessibilityBreakdown(report: AuditReport): ScoreBreakdown {
   tips.push("Test your site using a screen reader to experience how visually impaired users navigate it.");
   tips.push("Ensure all interactive elements can be used with keyboard only (no mouse required).");
 
-  const grade = getGrade(score);
-
   return {
     category: "accessibility",
     categoryLabel: "Accessibility",
@@ -848,8 +1015,7 @@ function generateAccessibilityBreakdown(report: AuditReport): ScoreBreakdown {
     deductions,
     bonuses,
     tips,
-    grade,
-    gradeExplanation: getGradeExplanation(grade),
+
   };
 }
 
@@ -947,8 +1113,6 @@ function generateSecurityBreakdown(report: AuditReport): ScoreBreakdown {
   }
 
   score = Math.min(100, score);
-  const grade = getGrade(score);
-
   return {
     category: "security",
     categoryLabel: "Security",
@@ -961,8 +1125,7 @@ function generateSecurityBreakdown(report: AuditReport): ScoreBreakdown {
     deductions,
     bonuses,
     tips,
-    grade,
-    gradeExplanation: getGradeExplanation(grade),
+
   };
 }
 
@@ -1049,8 +1212,6 @@ function generateSocialBreakdown(report: AuditReport): ScoreBreakdown {
   }
 
   score = Math.min(100, score);
-  const grade = getGrade(score);
-
   return {
     category: "social",
     categoryLabel: "Social Media",
@@ -1063,8 +1224,7 @@ function generateSocialBreakdown(report: AuditReport): ScoreBreakdown {
     deductions,
     bonuses,
     tips,
-    grade,
-    gradeExplanation: getGradeExplanation(grade),
+
   };
 }
 
@@ -1163,8 +1323,6 @@ function generateLocalPresenceBreakdown(report: AuditReport): ScoreBreakdown {
   }
 
   score = Math.min(100, score);
-  const grade = getGrade(score);
-
   return {
     category: "localPresence",
     categoryLabel: "Local Presence",
@@ -1177,8 +1335,7 @@ function generateLocalPresenceBreakdown(report: AuditReport): ScoreBreakdown {
     deductions,
     bonuses,
     tips,
-    grade,
-    gradeExplanation: getGradeExplanation(grade),
+
   };
 }
 
@@ -1242,8 +1399,6 @@ function generateReviewsBreakdown(report: AuditReport): ScoreBreakdown {
   tips.push("Encourage satisfied customers to leave reviews - 88% of people trust online reviews as much as personal recommendations.");
 
   score = Math.min(100, score);
-  const grade = getGrade(score);
-
   return {
     category: "reviews",
     categoryLabel: "Reviews & Reputation",
@@ -1256,8 +1411,7 @@ function generateReviewsBreakdown(report: AuditReport): ScoreBreakdown {
     deductions,
     bonuses,
     tips,
-    grade,
-    gradeExplanation: getGradeExplanation(grade),
+
   };
 }
 
@@ -1279,8 +1433,6 @@ function createEmptyBreakdown(
     deductions: [],
     bonuses: [],
     tips: ["No data available for this category."],
-    grade: "F",
-    gradeExplanation: "Unable to analyze this area.",
   };
 }
 
@@ -1494,8 +1646,6 @@ function generateVisibilityBreakdown(report: AuditReport): ScoreBreakdown {
   }
 
   score = Math.max(0, Math.min(100, score));
-  const grade = getGrade(score);
-
   return {
     category: "visibility",
     categoryLabel: "Findability",
@@ -1510,8 +1660,7 @@ function generateVisibilityBreakdown(report: AuditReport): ScoreBreakdown {
     deductions,
     bonuses,
     tips,
-    grade,
-    gradeExplanation: getGradeExplanation(grade),
+
   };
 }
 
@@ -1620,8 +1769,6 @@ function generateTrustBreakdown(report: AuditReport): ScoreBreakdown {
   }
 
   score = Math.min(100, score);
-  const grade = getGrade(score);
-
   return {
     category: "trust",
     categoryLabel: "Credibility",
@@ -1636,8 +1783,7 @@ function generateTrustBreakdown(report: AuditReport): ScoreBreakdown {
     deductions,
     bonuses,
     tips,
-    grade,
-    gradeExplanation: getGradeExplanation(grade),
+
   };
 }
 
@@ -1726,6 +1872,7 @@ function extractSpeedFacts(report: AuditReport): SpeedFacts {
       tapTargetsOk: mobile?.tapTargetsOk || false,
     },
     opportunities: fundamentals?.opportunities || [],
+    diagnostics: fundamentals?.diagnostics,
   };
 }
 

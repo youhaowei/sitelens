@@ -64,8 +64,76 @@ export interface ScoreBreakdown {
   deductions: ScoreDeduction[];
   bonuses: ScoreBonus[];
   tips: string[];
-  grade: "A" | "B" | "C" | "D" | "F";
-  gradeExplanation: string;
+  coreWebVitals?: CoreWebVitalsData;
+}
+
+// ============================================
+// CORE WEB VITALS
+// ============================================
+
+export type MetricStatus = "good" | "needs-improvement" | "poor";
+
+export type PerformanceMetricKey = "lcp" | "cls" | "tbt" | "fcp" | "si" | "ttfb" | "tti";
+
+export interface MetricThreshold {
+  good: number;
+  poor: number;
+}
+
+// Official Google thresholds for Core Web Vitals
+export const CWV_THRESHOLDS: Record<PerformanceMetricKey, MetricThreshold> = {
+  lcp: { good: 2500, poor: 4000 },
+  cls: { good: 0.1, poor: 0.25 },
+  tbt: { good: 200, poor: 600 },
+  fcp: { good: 1800, poor: 3000 },
+  si: { good: 3400, poor: 5800 },
+  ttfb: { good: 800, poor: 1800 },
+  tti: { good: 3800, poor: 7300 },
+} as const;
+
+export interface MetricData {
+  value: number;
+  score?: number; // 0-100 individual metric score
+  weight?: number; // Lighthouse weight (e.g., 0.25 for 25%)
+  weightedScore?: number; // score × weight = points contributed
+  status: MetricStatus;
+  threshold: MetricThreshold;
+  displayValue: string;
+  label: string;
+  description: string;
+}
+
+export interface DiagnosticSummary {
+  label: string;
+  value: string;
+  status?: MetricStatus;
+}
+
+export interface CoreWebVitalsData {
+  lcp: MetricData | null;
+  cls: MetricData | null;
+  tbt: MetricData | null;
+  fcp?: MetricData | null;
+  si?: MetricData | null;
+  ttfb?: MetricData | null;
+  tti?: MetricData | null;
+  passingCount: number;
+  failingCount: number;
+  recommendations: PerformanceRecommendation[];
+  diagnosticSummaries?: DiagnosticSummary[];
+}
+
+export interface PerformanceRecommendation {
+  id: string;
+  metric: PerformanceMetricKey;
+  priority: number;
+  impact: "high" | "medium" | "low";
+  title: string;
+  description: string;
+  howToFix: string;
+  learnMoreUrl?: string;
+  // How far over the threshold
+  ratio?: number; // e.g., 3.7 means 3.7x over threshold
 }
 
 export interface DetailedScores {
@@ -96,6 +164,58 @@ export interface SpeedOpportunity {
   details?: string;
 }
 
+export interface MainThreadTask {
+  group: string; // "Script Evaluation", "Style & Layout", "Rendering", etc.
+  duration: number; // milliseconds
+}
+
+export interface ScriptBootupItem {
+  url: string;
+  total: number; // Total CPU time (ms)
+  scripting: number; // Script evaluation time (ms)
+  scriptParseCompile: number; // Parse/compile time (ms)
+}
+
+export interface LCPBreakdown {
+  timeToFirstByte: number; // TTFB portion (ms)
+  resourceLoadDelay: number; // Time from TTFB to resource request (ms)
+  resourceLoadDuration: number; // Time to download the LCP resource (ms)
+  elementRenderDelay: number; // Time from download to render (ms)
+}
+
+export interface CLSCulprit {
+  node: string; // CSS selector or description
+  score: number; // Contribution to CLS
+}
+
+export interface ThirdPartySummary {
+  entity: string; // e.g., "Google Analytics", "Facebook"
+  transferSize: number; // bytes
+  blockingTime: number; // ms
+  mainThreadTime: number; // ms
+}
+
+export interface NetworkRequestSummary {
+  resourceType: string; // "Script", "Image", "Document", etc.
+  count: number;
+  transferSize: number; // bytes
+}
+
+export interface PerformanceDiagnostics {
+  mainThreadWork?: MainThreadTask[];
+  mainThreadTotalTime?: number;
+  bootupTime?: ScriptBootupItem[];
+  bootupTotalTime?: number;
+  totalByteWeight?: number;
+  lcpBreakdown?: LCPBreakdown;
+  clsCulprits?: CLSCulprit[];
+  thirdPartySummary?: ThirdPartySummary[];
+  thirdPartyTotalBlockingTime?: number;
+  networkSummary?: NetworkRequestSummary[];
+  networkTotalRequests?: number;
+  networkTotalSize?: number;
+}
+
 export interface FundamentalsData {
   scores: {
     performance: number;
@@ -111,6 +231,7 @@ export interface FundamentalsData {
     tapTargetsOk: boolean;
   };
   opportunities: SpeedOpportunity[];
+  diagnostics?: PerformanceDiagnostics;
   issues: AuditIssue[];
 }
 
@@ -607,14 +728,14 @@ export interface SiteFacts {
 }
 
 export interface SpeedFacts {
-  lcp?: number; // Largest Contentful Paint (ms)
-  cls?: number; // Cumulative Layout Shift
-  fcp?: number; // First Contentful Paint (ms)
-  tbt?: number; // Total Blocking Time (ms)
-  ttfb?: number; // Time to First Byte (ms)
-  si?: number; // Speed Index
-  tti?: number; // Time to Interactive (ms)
-  lighthouseScore?: number; // Raw Lighthouse performance score
+  lcp?: number;
+  cls?: number;
+  fcp?: number;
+  tbt?: number;
+  ttfb?: number;
+  si?: number;
+  tti?: number;
+  lighthouseScore?: number;
   mobile: {
     isMobileFriendly: boolean;
     viewportConfigured: boolean;
@@ -622,6 +743,7 @@ export interface SpeedFacts {
     tapTargetsOk: boolean;
   };
   opportunities: SpeedOpportunity[];
+  diagnostics?: PerformanceDiagnostics;
 }
 
 export interface ContentFacts {

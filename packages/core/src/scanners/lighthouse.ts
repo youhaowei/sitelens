@@ -7,8 +7,32 @@ import type {
   AccessibilityData,
   AccessibilityViolation,
   AccessibilityLevelSummary,
+  PerformanceDiagnostics,
 } from "@sitelens/shared/types";
 import { createIssue } from "../recommendations";
+
+interface LighthouseAuditDetails {
+  type: string;
+  overallSavingsMs?: number;
+  items?: Array<{
+    node?: { selector?: string; snippet?: string };
+    impact?: string;
+    help?: string;
+    url?: string;
+    total?: number;
+    scripting?: number;
+    scriptParseCompile?: number;
+    group?: string;
+    groupLabel?: string;
+    duration?: number;
+    transferSize?: number;
+    blockingTime?: number;
+    mainThreadTime?: number;
+    entity?: { text?: string };
+    resourceType?: string;
+    subItems?: { items?: Array<{ signal?: string; score?: number }> };
+  }>;
+}
 
 interface LighthouseResult {
   lhr: {
@@ -21,15 +45,7 @@ interface LighthouseResult {
         description: string;
         score: number | null;
         numericValue?: number;
-        details?: {
-          type: string;
-          overallSavingsMs?: number;
-          items?: Array<{
-            node?: { selector?: string };
-            impact?: string;
-            help?: string;
-          }>;
-        };
+        details?: LighthouseAuditDetails;
       }
     >;
   };
@@ -110,6 +126,7 @@ export class LighthouseScanner implements Scanner<FundamentalsData> {
     const tapTargetsAudit = audits["tap-targets"];
 
     const opportunities = this.extractOpportunities(audits);
+    const diagnostics = this.extractDiagnostics(audits);
     this.addPerformanceIssues(audits, issues);
     this.addMobileIssues(viewportAudit, categories, issues);
 
@@ -138,6 +155,7 @@ export class LighthouseScanner implements Scanner<FundamentalsData> {
         tapTargetsOk: tapTargetsAudit?.score === 1,
       },
       opportunities,
+      diagnostics,
       issues,
     };
   }
@@ -266,6 +284,116 @@ export class LighthouseScanner implements Scanner<FundamentalsData> {
     }
 
     return opportunities.sort((a, b) => b.savings - a.savings);
+  }
+
+  private extractDiagnostics(
+    audits: LighthouseResult["lhr"]["audits"]
+  ): PerformanceDiagnostics {
+    const diagnostics: PerformanceDiagnostics = {};
+
+    const mainThreadAudit = audits["mainthread-work-breakdown"];
+    if (mainThreadAudit?.details?.items) {
+      diagnostics.mainThreadWork = mainThreadAudit.details.items
+        .filter(item => item.group && item.duration)
+        .map(item => ({
+          group: item.groupLabel || item.group || "Other",
+          duration: Math.round(item.duration || 0),
+        }))
+        .sort((a, b) => b.duration - a.duration)
+        .slice(0, 10);
+      diagnostics.mainThreadTotalTime = mainThreadAudit.numericValue 
+        ? Math.round(mainThreadAudit.numericValue) 
+        : undefined;
+    }
+
+    const bootupAudit = audits["bootup-time"];
+    if (bootupAudit?.details?.items) {
+      diagnostics.bootupTime = bootupAudit.details.items
+        .filter(item => item.url && item.total)
+        .map(item => ({
+          url: item.url || "",
+          total: Math.round(item.total || 0),
+          scripting: Math.round(item.scripting || 0),
+          scriptParseCompile: Math.round(item.scriptParseCompile || 0),
+        }))
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 10);
+      diagnostics.bootupTotalTime = bootupAudit.numericValue
+        ? Math.round(bootupAudit.numericValue)
+        : undefined;
+    }
+
+    const bytesAudit = audits["total-byte-weight"];
+    if (bytesAudit?.numericValue) {
+      diagnostics.totalByteWeight = Math.round(bytesAudit.numericValue);
+    }
+
+    const lcpElement = audits["largest-contentful-paint-element"];
+    if (lcpElement?.details?.items?.[0]?.subItems?.items) {
+      const phases = lcpElement.details.items[0].subItems.items;
+      const getPhaseValue = (signal: string) => {
+        const phase = phases.find(p => p.signal === signal);
+        return phase?.score ? Math.round(phase.score) : 0;
+      };
+      diagnostics.lcpBreakdown = {
+        timeToFirstByte: getPhaseValue("timeToFirstByte"),
+        resourceLoadDelay: getPhaseValue("resourceLoadDelay"),
+        resourceLoadDuration: getPhaseValue("resourceLoadTime"),
+        elementRenderDelay: getPhaseValue("elementRenderDelay"),
+      };
+    }
+
+    const clsAudit = audits["layout-shift-elements"];
+    if (clsAudit?.details?.items) {
+      diagnostics.clsCulprits = clsAudit.details.items
+        .filter(item => item.node)
+        .map(item => ({
+          node: item.node?.selector || item.node?.snippet || "Unknown element",
+          score: 0,
+        }))
+        .slice(0, 5);
+    }
+
+    const thirdPartyAudit = audits["third-party-summary"];
+    if (thirdPartyAudit?.details?.items) {
+      diagnostics.thirdPartySummary = thirdPartyAudit.details.items
+        .filter(item => item.entity?.text)
+        .map(item => ({
+          entity: item.entity?.text || "Unknown",
+          transferSize: item.transferSize || 0,
+          blockingTime: Math.round(item.blockingTime || 0),
+          mainThreadTime: Math.round(item.mainThreadTime || 0),
+        }))
+        .sort((a, b) => b.blockingTime - a.blockingTime)
+        .slice(0, 10);
+      diagnostics.thirdPartyTotalBlockingTime = thirdPartyAudit.numericValue
+        ? Math.round(thirdPartyAudit.numericValue)
+        : undefined;
+    }
+
+    const networkAudit = audits["network-requests"];
+    if (networkAudit?.details?.items) {
+      const byType = new Map<string, { count: number; size: number }>();
+      for (const item of networkAudit.details.items) {
+        const type = item.resourceType || "Other";
+        const existing = byType.get(type) || { count: 0, size: 0 };
+        existing.count++;
+        existing.size += item.transferSize || 0;
+        byType.set(type, existing);
+      }
+      diagnostics.networkSummary = Array.from(byType.entries())
+        .map(([resourceType, data]) => ({
+          resourceType,
+          count: data.count,
+          transferSize: data.size,
+        }))
+        .sort((a, b) => b.transferSize - a.transferSize);
+      diagnostics.networkTotalRequests = networkAudit.details.items.length;
+      diagnostics.networkTotalSize = Array.from(byType.values())
+        .reduce((sum, d) => sum + d.size, 0);
+    }
+
+    return diagnostics;
   }
 
   private addPerformanceIssues(
