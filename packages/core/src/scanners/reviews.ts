@@ -3,6 +3,11 @@ import type { Scanner, ScannerContext } from "./types";
 import type { ReviewsData, ReviewPlatform, AuditIssue } from "@sitelens/shared/types";
 import { createIssue } from "../recommendations";
 
+interface ExtractedRating {
+  rating: number;
+  count: number;
+}
+
 const REVIEW_PLATFORMS = [
   { name: "Google", patterns: [/google\.com\/maps\/place/i, /g\.page/i, /maps\.google\.com/i] },
   { name: "Yelp", patterns: [/yelp\.com\/biz/i] },
@@ -26,13 +31,9 @@ export class ReviewsScanner implements Scanner<ReviewsData> {
     const platforms = this.detectReviewPlatforms($);
     const testimonialPage = this.findTestimonialPage($, context.url);
     const websiteShowsReviews = this.detectEmbeddedReviews($);
-    const schemaRating = this.extractSchemaRating($);
 
-    const platformsWithRatings = platforms.filter((p) => p.rating !== null);
-    const averageRating =
-      platformsWithRatings.length > 0
-        ? platformsWithRatings.reduce((sum, p) => sum + (p.rating || 0), 0) / platformsWithRatings.length
-        : schemaRating?.rating || 0;
+    const extractedRating = this.extractRatingWithPrecedence($);
+    const averageRating = extractedRating?.rating || 0;
 
     const totalReviews = platforms.reduce((sum, p) => sum + p.reviewCount, 0);
 
@@ -209,13 +210,16 @@ export class ReviewsScanner implements Scanner<ReviewsData> {
     return null;
   }
 
-  private findRatingInSchema(schema: Record<string, unknown>): { rating: number; count: number } | null {
+  private findRatingInSchema(schema: Record<string, unknown>): ExtractedRating | null {
     if (schema.aggregateRating) {
       const aggRating = schema.aggregateRating as Record<string, unknown>;
-      return {
-        rating: parseFloat(String(aggRating.ratingValue)) || 0,
-        count: parseInt(String(aggRating.reviewCount)) || 0,
-      };
+      const rating = parseFloat(String(aggRating.ratingValue)) || 0;
+      if (rating > 0 && rating <= 5) {
+        return {
+          rating,
+          count: parseInt(String(aggRating.reviewCount)) || 0,
+        };
+      }
     }
 
     if (Array.isArray(schema["@graph"])) {
@@ -223,11 +227,103 @@ export class ReviewsScanner implements Scanner<ReviewsData> {
         const itemObj = item as Record<string, unknown>;
         if (itemObj.aggregateRating) {
           const aggRating = itemObj.aggregateRating as Record<string, unknown>;
-          return {
-            rating: parseFloat(String(aggRating.ratingValue)) || 0,
-            count: parseInt(String(aggRating.reviewCount)) || 0,
-          };
+          const rating = parseFloat(String(aggRating.ratingValue)) || 0;
+          if (rating > 0 && rating <= 5) {
+            return {
+              rating,
+              count: parseInt(String(aggRating.reviewCount)) || 0,
+            };
+          }
         }
+      }
+    }
+
+    return null;
+  }
+
+  private extractRatingWithPrecedence($: cheerio.CheerioAPI): ExtractedRating | null {
+    const schemaRating = this.extractSchemaRating($);
+    if (schemaRating) return schemaRating;
+
+    const microdataRating = this.extractMicrodataRating($);
+    if (microdataRating) return microdataRating;
+
+    const visibleRating = this.extractVisibleRating($);
+    if (visibleRating) return visibleRating;
+
+    return null;
+  }
+
+  private extractMicrodataRating($: cheerio.CheerioAPI): ExtractedRating | null {
+    const ratingValueEl = $('[itemprop="ratingValue"]');
+    if (ratingValueEl.length > 0) {
+      const content = ratingValueEl.attr("content") || ratingValueEl.text();
+      const rating = parseFloat(content);
+      if (rating > 0 && rating <= 5) {
+        const reviewCountEl = $('[itemprop="reviewCount"]');
+        const count = reviewCountEl.length > 0
+          ? parseInt(reviewCountEl.attr("content") || reviewCountEl.text()) || 0
+          : 0;
+        return { rating, count };
+      }
+    }
+
+    const aggregateRatingEl = $('[itemprop="aggregateRating"]');
+    if (aggregateRatingEl.length > 0) {
+      const ratingEl = aggregateRatingEl.find('[itemprop="ratingValue"]');
+      if (ratingEl.length > 0) {
+        const content = ratingEl.attr("content") || ratingEl.text();
+        const rating = parseFloat(content);
+        if (rating > 0 && rating <= 5) {
+          const countEl = aggregateRatingEl.find('[itemprop="reviewCount"]');
+          const count = countEl.length > 0
+            ? parseInt(countEl.attr("content") || countEl.text()) || 0
+            : 0;
+          return { rating, count };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private extractVisibleRating($: cheerio.CheerioAPI): ExtractedRating | null {
+    const bodyText = $("body").text();
+
+    const starsPattern = /(\d+(?:\.\d+)?)\s*(?:star|stars|★)/i;
+    const starsMatch = bodyText.match(starsPattern);
+    if (starsMatch?.[1]) {
+      const rating = parseFloat(starsMatch[1]);
+      if (rating > 0 && rating <= 5) {
+        return { rating, count: 0 };
+      }
+    }
+
+    const outOf5Pattern = /(\d+(?:\.\d+)?)\s*\/\s*5/i;
+    const outOf5Match = bodyText.match(outOf5Pattern);
+    if (outOf5Match?.[1]) {
+      const rating = parseFloat(outOf5Match[1]);
+      if (rating > 0 && rating <= 5) {
+        return { rating, count: 0 };
+      }
+    }
+
+    const outOf10Pattern = /(\d+(?:\.\d+)?)\s*\/\s*10/i;
+    const outOf10Match = bodyText.match(outOf10Pattern);
+    if (outOf10Match?.[1]) {
+      const rawRating = parseFloat(outOf10Match[1]);
+      const rating = rawRating / 2;
+      if (rating > 0 && rating <= 5) {
+        return { rating, count: 0 };
+      }
+    }
+
+    const ratedPattern = /rated\s+(\d+(?:\.\d+)?)/i;
+    const ratedMatch = bodyText.match(ratedPattern);
+    if (ratedMatch?.[1]) {
+      const rating = parseFloat(ratedMatch[1]);
+      if (rating > 0 && rating <= 5) {
+        return { rating, count: 0 };
       }
     }
 
