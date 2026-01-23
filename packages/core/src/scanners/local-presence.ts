@@ -44,7 +44,7 @@ export class LocalPresenceScanner implements Scanner<LocalPresenceData> {
     const addresses = this.extractUnique(textContent.match(ADDRESS_REGEX) || []);
 
     const businessName = this.extractBusinessName($, context.url);
-    const googleBusinessProfile = this.detectGoogleBusinessProfile($);
+    const googleBusinessProfile = await this.detectGoogleBusinessProfile($);
     const googleMaps = this.detectGoogleMaps($);
 
     const bingPlaces = {
@@ -187,7 +187,7 @@ export class LocalPresenceScanner implements Scanner<LocalPresenceData> {
     }
   }
 
-  private detectGoogleBusinessProfile($: cheerio.CheerioAPI) {
+  private async detectGoogleBusinessProfile($: cheerio.CheerioAPI) {
     const result = {
       exists: false,
       url: null as string | null,
@@ -220,9 +220,43 @@ export class LocalPresenceScanner implements Scanner<LocalPresenceData> {
 
     if (!result.exists) {
       result.issues.push("No Google Business Profile link detected");
+      return result;
+    }
+
+    if (result.url) {
+      const validation = await this.validateGbpUrl(result.url);
+      result.verified = validation.valid;
+      if (!validation.valid && validation.error) {
+        result.issues.push(validation.error);
+      }
     }
 
     return result;
+  }
+
+  private async validateGbpUrl(url: string): Promise<{ valid: boolean; error?: string }> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    try {
+      const response = await fetch(url, {
+        method: "HEAD",
+        signal: controller.signal,
+        redirect: "follow",
+      });
+      clearTimeout(timeout);
+
+      if (response.status >= 400) {
+        return { valid: false, error: `Link returned HTTP ${response.status}` };
+      }
+      return { valid: true };
+    } catch (error) {
+      clearTimeout(timeout);
+      if (error instanceof Error && error.name === "AbortError") {
+        return { valid: false, error: "Link validation timed out" };
+      }
+      return { valid: false, error: "Link could not be reached" };
+    }
   }
 
   private detectGoogleMaps($: cheerio.CheerioAPI) {
