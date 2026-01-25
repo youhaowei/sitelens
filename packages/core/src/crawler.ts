@@ -204,7 +204,7 @@ export class SiteCrawler {
       const response = await fetch(url, {
         signal: AbortSignal.timeout(this.options.timeout),
         headers: {
-          "User-Agent": "OpenSiteAudit/1.0 (+https://github.com/open-site-audit)",
+          "User-Agent": "Sitelens/1.0 (+https://github.com/youhaowei/sitelens)",
           Accept: "text/html,application/xhtml+xml",
         },
       });
