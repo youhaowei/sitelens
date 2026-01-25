@@ -120,18 +120,7 @@ export class AuditEngine {
       report(10, "Loading page...");
       const { page, resolvedUrl } = await this.browserManager.getPage(config.url);
 
-      report(15, "Capturing screenshots...");
-      const capturedScreenshots = await this.browserManager.captureScreenshotBuffers(page, resolvedUrl);
-
-      // Legacy screenshots format - find desktop and mobile from captured array
-      const desktopScreenshot = capturedScreenshots.find(s => s.name === "desktop");
-      const mobileScreenshot = capturedScreenshots.find(s => s.name === "mobile");
-      const screenshots = {
-        desktop: desktopScreenshot?.buffer.toString("base64") || "",
-        mobile: mobileScreenshot?.buffer.toString("base64") || "",
-      };
-
-      report(20, "Extracting HTML...");
+      report(15, "Extracting HTML...");
       const html = await this.browserManager.getHtml(page);
 
       // Use the resolved URL (with correct protocol) for all operations
@@ -143,36 +132,49 @@ export class AuditEngine {
         onProgress: (msg: string) => report(currentProgress, msg),
       };
 
-      report(25, "Running Lighthouse audit...");
+      // Run Lighthouse FIRST while browser state is clean (before any parallel contexts)
+      report(20, "Running Lighthouse audit...");
       const fundamentals = await this.lighthouseScanner.run(context);
+
+      // Capture screenshots AFTER Lighthouse to avoid debugging port conflicts
+      report(35, "Capturing screenshots...");
+      const capturedScreenshots = await this.browserManager.captureScreenshotBuffers(page, resolvedUrl);
+
+      // Legacy screenshots format - find desktop and mobile from captured array
+      const desktopScreenshot = capturedScreenshots.find(s => s.name === "desktop");
+      const mobileScreenshot = capturedScreenshots.find(s => s.name === "mobile");
+      const screenshots = {
+        desktop: desktopScreenshot?.buffer.toString("base64") || "",
+        mobile: mobileScreenshot?.buffer.toString("base64") || "",
+      };
 
       const accessibility = this.lighthouseScanner.extractAccessibilityData(
         {},
         fundamentals.scores.accessibility
       );
 
-      report(45, "Analyzing SEO...");
+      report(50, "Analyzing SEO...");
       const seo = await this.seoScanner.run(context);
 
-      report(55, "Checking social presence...");
+      report(60, "Checking social presence...");
       const social = await this.socialScanner.run(context);
 
-      report(65, "Detecting technologies...");
+      report(65, "Detecting technologies and platforms...");
       const tech = await this.techScanner.run(context);
 
-      report(75, "Detecting advertising platforms...");
+      report(70, "Detecting advertising platforms...");
       const advertising = await this.advertisingScanner.run(context);
 
-      report(80, "Checking e-commerce features...");
+      report(75, "Checking e-commerce features...");
       const ecommerce = await this.ecommerceScanner.run(context);
 
-      report(85, "Finding local business info...");
+      report(80, "Finding local business info...");
       const local = await this.localScanner.run(context);
 
-      report(87, "Analyzing local presence...");
+      report(83, "Analyzing local presence...");
       const localPresence = await this.localPresenceScanner.run(context);
 
-      report(90, "Checking reviews...");
+      report(86, "Checking reviews...");
       const reviews = await this.reviewsScanner.run(context);
 
       await page.close();
