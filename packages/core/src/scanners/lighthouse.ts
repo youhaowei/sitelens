@@ -96,12 +96,21 @@ export class LighthouseScanner implements Scanner<FundamentalsData> {
   async run(context: ScannerContext): Promise<FundamentalsData> {
     context.onProgress?.("Running Lighthouse audit...");
 
-    const result = (await lighthouse(context.url, {
+    const LIGHTHOUSE_TIMEOUT = 120000; // 2 minutes max
+
+    const lighthousePromise = lighthouse(context.url, {
       port: context.browserPort,
       output: "json",
       logLevel: "error",
       disableStorageReset: true,
-    })) as LighthouseResult | undefined;
+      maxWaitForLoad: 45000,
+    }) as Promise<LighthouseResult | undefined>;
+
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("Lighthouse audit timed out after 2 minutes")), LIGHTHOUSE_TIMEOUT)
+    );
+
+    const result = await Promise.race([lighthousePromise, timeoutPromise]);
 
     if (!result?.lhr) {
       throw new Error("Lighthouse failed to produce results");
