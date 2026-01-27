@@ -94,78 +94,124 @@ export class LighthouseScanner implements Scanner<FundamentalsData> {
   name = "Core Fundamentals";
 
   async run(context: ScannerContext): Promise<FundamentalsData> {
-    context.onProgress?.("Running Lighthouse audit...");
+    const log = (msg: string) => console.log(`[Lighthouse] ${msg}`);
 
-    const LIGHTHOUSE_TIMEOUT = 120000; // 2 minutes max
+    try {
+      log(`Starting audit for ${context.url} on port ${context.browserPort}`);
+      context.onProgress?.("Running Lighthouse audit...");
 
-    const lighthousePromise = lighthouse(context.url, {
-      port: context.browserPort,
-      output: "json",
-      logLevel: "error",
-      disableStorageReset: true,
-      maxWaitForLoad: 45000,
-    }) as Promise<LighthouseResult | undefined>;
+      const LIGHTHOUSE_TIMEOUT = 120000; // 2 minutes max
+      const startTime = Date.now();
 
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Lighthouse audit timed out after 2 minutes")), LIGHTHOUSE_TIMEOUT)
-    );
+      log("Initializing Lighthouse...");
+      const lighthousePromise = lighthouse(context.url, {
+        port: context.browserPort,
+        output: "json",
+        logLevel: "error",
+        disableStorageReset: true,
+        maxWaitForLoad: 45000,
+      }) as Promise<LighthouseResult | undefined>;
 
-    const result = await Promise.race([lighthousePromise, timeoutPromise]);
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Lighthouse audit timed out after 2 minutes")), LIGHTHOUSE_TIMEOUT)
+      );
 
-    if (!result?.lhr) {
-      throw new Error("Lighthouse failed to produce results");
+      log("Waiting for Lighthouse to complete...");
+      const result = await Promise.race([lighthousePromise, timeoutPromise]);
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      log(`Lighthouse completed in ${elapsed}s`);
+
+      if (!result?.lhr) {
+        log("ERROR: Lighthouse returned no results");
+        return this.getEmptyResult("Lighthouse returned no results");
+      }
+
+      const { lhr } = result;
+      const categories = lhr.categories;
+      const audits = lhr.audits;
+      const issues: AuditIssue[] = [];
+
+      log(`Scores - Performance: ${Math.round((categories.performance?.score ?? 0) * 100)}, ` +
+          `Accessibility: ${Math.round((categories.accessibility?.score ?? 0) * 100)}, ` +
+          `SEO: ${Math.round((categories.seo?.score ?? 0) * 100)}`);
+
+      const getScore = (category: string): number => {
+        const score = categories[category]?.score;
+        return Math.round((score ?? 0) * 100);
+      };
+
+      const getNumericValue = (auditId: string): number | undefined => {
+        return audits[auditId]?.numericValue;
+      };
+
+      const viewportAudit = audits["viewport"];
+      const fontSizeAudit = audits["font-size"];
+      const tapTargetsAudit = audits["tap-targets"];
+
+      const opportunities = this.extractOpportunities(audits);
+      const diagnostics = this.extractDiagnostics(audits);
+      this.addPerformanceIssues(audits, issues);
+      this.addMobileIssues(viewportAudit, categories, issues);
+
+      log("Audit complete, returning results");
+      return {
+        scores: {
+          performance: getScore("performance"),
+          accessibility: getScore("accessibility"),
+          bestPractices: getScore("best-practices"),
+          seo: getScore("seo"),
+        },
+        metrics: {
+          tti: getNumericValue("interactive"),
+          lcp: getNumericValue("largest-contentful-paint"),
+          cls: getNumericValue("cumulative-layout-shift"),
+          fcp: getNumericValue("first-contentful-paint"),
+          si: getNumericValue("speed-index"),
+          tbt: getNumericValue("total-blocking-time"),
+          ttfb: getNumericValue("server-response-time"),
+        },
+        mobile: {
+          isMobileFriendly: categories["seo"]?.score
+            ? categories["seo"].score >= 0.9
+            : false,
+          viewportConfigured: viewportAudit?.score === 1,
+          fontSizeOk: fontSizeAudit?.score === 1,
+          tapTargetsOk: tapTargetsAudit?.score === 1,
+        },
+        opportunities,
+        diagnostics,
+        issues,
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error(`[Lighthouse] ERROR: ${errorMsg}`);
+      context.onProgress?.(`Lighthouse audit failed: ${errorMsg}`);
+      return this.getEmptyResult(errorMsg);
     }
+  }
 
-    const { lhr } = result;
-    const categories = lhr.categories;
-    const audits = lhr.audits;
-    const issues: AuditIssue[] = [];
-
-    const getScore = (category: string): number => {
-      const score = categories[category]?.score;
-      return Math.round((score ?? 0) * 100);
-    };
-
-    const getNumericValue = (auditId: string): number | undefined => {
-      return audits[auditId]?.numericValue;
-    };
-
-    const viewportAudit = audits["viewport"];
-    const fontSizeAudit = audits["font-size"];
-    const tapTargetsAudit = audits["tap-targets"];
-
-    const opportunities = this.extractOpportunities(audits);
-    const diagnostics = this.extractDiagnostics(audits);
-    this.addPerformanceIssues(audits, issues);
-    this.addMobileIssues(viewportAudit, categories, issues);
-
+  private getEmptyResult(error: string): FundamentalsData {
     return {
       scores: {
-        performance: getScore("performance"),
-        accessibility: getScore("accessibility"),
-        bestPractices: getScore("best-practices"),
-        seo: getScore("seo"),
+        performance: 0,
+        accessibility: 0,
+        bestPractices: 0,
+        seo: 0,
       },
-      metrics: {
-        tti: getNumericValue("interactive"),
-        lcp: getNumericValue("largest-contentful-paint"),
-        cls: getNumericValue("cumulative-layout-shift"),
-        fcp: getNumericValue("first-contentful-paint"),
-        si: getNumericValue("speed-index"),
-        tbt: getNumericValue("total-blocking-time"),
-        ttfb: getNumericValue("server-response-time"),
-      },
+      metrics: {},
       mobile: {
-        isMobileFriendly: categories["seo"]?.score
-          ? categories["seo"].score >= 0.9
-          : false,
-        viewportConfigured: viewportAudit?.score === 1,
-        fontSizeOk: fontSizeAudit?.score === 1,
-        tapTargetsOk: tapTargetsAudit?.score === 1,
+        isMobileFriendly: false,
+        viewportConfigured: false,
+        fontSizeOk: false,
+        tapTargetsOk: false,
       },
-      opportunities,
-      diagnostics,
-      issues,
+      opportunities: [],
+      diagnostics: {},
+      issues: [
+        createIssue("lighthouse_failed", {
+          description: `Lighthouse audit failed: ${error}`,
+        }),
+      ],
     };
   }
 

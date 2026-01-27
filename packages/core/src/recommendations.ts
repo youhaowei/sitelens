@@ -481,6 +481,18 @@ const ISSUE_TEMPLATES: Record<string, IssueTemplate> = {
     impact: "Product schema can significantly improve click-through rates with rich search result displays.",
     effort: "medium",
   },
+
+  lighthouse_failed: {
+    id: "lighthouse_failed",
+    title: "Performance Audit Failed",
+    description: "The Lighthouse performance audit could not be completed.",
+    severity: "warning",
+    category: "performance",
+    recommendation:
+      "The performance audit timed out or encountered an error. This may be due to a slow-loading page, network issues, or the page blocking automated testing. Try running the audit again or check if the page is accessible.",
+    impact: "Performance scores and metrics are unavailable. Other audit results may still be valid.",
+    effort: "low",
+  },
 };
 
 export function createIssue(templateId: string, overrides?: Partial<AuditIssue>): AuditIssue {
