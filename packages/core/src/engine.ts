@@ -35,6 +35,8 @@ import {
   extractFacts,
   generateNewSuggestions,
 } from "./summary";
+import { createIssue } from "./recommendations";
+import type { AuditIssue } from "@sitelens/shared/types";
 import type {
   NewAuditScores,
   ScoreBreakdowns,
@@ -78,6 +80,12 @@ export interface NewAuditEngineResult {
   legacy: AuditResult;
 }
 
+interface ScannerResult<T> {
+  data: T;
+  failed: boolean;
+  error?: string;
+}
+
 export class AuditEngine {
   private browserManager: BrowserManager;
   private lighthouseScanner: LighthouseScanner;
@@ -89,6 +97,7 @@ export class AuditEngine {
   private reviewsScanner: ReviewsScanner;
   private advertisingScanner: AdvertisingScanner;
   private ecommerceScanner: EcommerceScanner;
+  private scannerErrors: AuditIssue[] = [];
 
   constructor() {
     this.browserManager = new BrowserManager();
@@ -103,10 +112,38 @@ export class AuditEngine {
     this.ecommerceScanner = new EcommerceScanner();
   }
 
+  private async runScanner<T>(
+    name: string,
+    scannerFn: () => Promise<T>,
+    defaultValue: T
+  ): Promise<ScannerResult<T>> {
+    try {
+      console.log(`[Engine] Starting ${name}...`);
+      const startTime = Date.now();
+      const data = await scannerFn();
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(`[Engine] ${name} completed in ${elapsed}s`);
+      return { data, failed: false };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error(`[Engine] ${name} FAILED: ${errorMsg}`);
+      this.scannerErrors.push(
+        createIssue("scanner_failed", {
+          title: `${name} Failed`,
+          description: `${name} failed: ${errorMsg}`,
+        })
+      );
+      return { data: defaultValue, failed: true, error: errorMsg };
+    }
+  }
+
   async run(
     config: ValidatedAuditConfig,
     onProgress?: ProgressCallback
   ): Promise<NewAuditEngineResult> {
+    // Reset scanner errors for each run
+    this.scannerErrors = [];
+
     let currentProgress = 0;
     const report = (progress: number, message: string) => {
       currentProgress = progress;
@@ -132,9 +169,86 @@ export class AuditEngine {
         onProgress: (msg: string) => report(currentProgress, msg),
       };
 
+      // Default values for failed scanners
+      const defaultFundamentals: FundamentalsData = {
+        scores: { performance: 0, accessibility: 0, bestPractices: 0, seo: 0 },
+        metrics: {},
+        mobile: { isMobileFriendly: false, viewportConfigured: false, fontSizeOk: false, tapTargetsOk: false },
+        opportunities: [],
+        diagnostics: {},
+        issues: [],
+      };
+      const defaultSeo: SeoData = {
+        meta: { title: null, description: null, canonical: null, robots: null, titleLength: 0, descriptionLength: 0, titleLengthOk: false, descriptionLengthOk: false, hasHreflang: false, language: null },
+        headings: { h1Count: 0, structure: [], structureOk: false, issues: [] },
+        content: { wordCount: 0, isThinContent: true, readingLevel: 0, readingEase: 0, readingEaseLabel: "Unknown", spellingErrors: [], paragraphCount: 0, avgSentenceLength: 0 },
+        images: { total: 0, missingAlt: 0, images: [], oversizedImages: [], unoptimizedCount: 0 },
+        links: { internal: [], external: [], broken: [], total: 0, nofollow: [] },
+        structuredData: [],
+        sitemap: { exists: false, url: null, issues: [] },
+        robots: { exists: false, content: null, allowsIndexing: false, sitemapUrls: [], issues: [] },
+        issues: [],
+      };
+      const defaultSocial: SocialData = {
+        openGraph: { hasTitle: false, hasDescription: false, hasImage: false, isComplete: false, data: { title: null, description: null, image: null, url: null, type: null, siteName: null } },
+        twitter: { hasCard: false, data: { card: null, title: null, description: null, image: null, site: null } },
+        profiles: {},
+        profileDetails: [],
+        issues: [],
+      };
+      const defaultTech: TechData = {
+        security: { isHTTPS: false, hasHSTS: false, mixedContent: false, securityHeaders: [], gdprCompliance: { hasPrivacyPolicy: false, hasCookieBanner: false, hasCookiePolicy: false, issues: [] }, issues: [] },
+        analytics: { googleAnalytics: false, googleAnalytics4: false, googleTagManager: false, facebookPixel: false, hotjar: false, mixpanel: false, segment: false, otherTrackers: [] },
+        advertising: { paidSearch: { googleAds: false, bingAds: false, detected: false, issues: [] }, socialAds: { facebookAds: false, instagramAds: false, linkedinAds: false, twitterAds: false, detected: false }, retargeting: { googleRemarketing: false, facebookPixel: false, otherPixels: [], detected: false }, displayAds: { googleDisplayNetwork: false, otherNetworks: [], detected: false }, issues: [] },
+        technologies: [],
+        cdns: [],
+        issues: [],
+      };
+      const defaultLocal: LocalData = { phones: [], addresses: [], emails: [] };
+      const defaultLocalPresence: LocalPresenceData = {
+        businessName: null,
+        googleBusinessProfile: { exists: false, url: null, verified: false, complete: false, issues: [] },
+        googleMaps: { listed: false, accurate: false, issues: [] },
+        bingPlaces: { listed: false, accurate: false, issues: [] },
+        appleBusinessConnect: { listed: false, issues: [] },
+        directories: [],
+        napConsistency: { consistent: false, name: { value: null, variations: [], isConsistent: false }, address: { value: null, variations: [], isConsistent: false }, phone: { value: null, variations: [], isConsistent: false }, issues: [] },
+        phones: [],
+        addresses: [],
+        emails: [],
+        issues: [],
+      };
+      const defaultReviews: ReviewsData = {
+        overall: { averageRating: 0, totalReviews: 0, recentReviews: 0 },
+        platforms: [],
+        websiteShowsReviews: false,
+        testimonialPage: null,
+        issues: [],
+      };
+      const defaultAdvertising: AdvertisingData = {
+        paidSearch: { googleAds: false, bingAds: false, detected: false, issues: [] },
+        socialAds: { facebookAds: false, instagramAds: false, linkedinAds: false, twitterAds: false, detected: false },
+        retargeting: { googleRemarketing: false, facebookPixel: false, otherPixels: [], detected: false },
+        displayAds: { googleDisplayNetwork: false, otherNetworks: [], detected: false },
+        issues: [],
+      };
+      const defaultEcommerce: EcommerceData = {
+        hasEcommerce: false,
+        platform: { name: null, detected: false },
+        paymentProcessors: [],
+        cartFunctionality: false,
+        sslOnCheckout: false,
+        productSchema: false,
+        issues: [],
+      };
+
       // Run Lighthouse FIRST while browser state is clean (before any parallel contexts)
       report(20, "Running Lighthouse audit...");
-      const fundamentals = await this.lighthouseScanner.run(context);
+      const { data: fundamentals } = await this.runScanner(
+        "Lighthouse Audit",
+        () => this.lighthouseScanner.run(context),
+        defaultFundamentals
+      );
 
       // Capture screenshots AFTER Lighthouse to avoid debugging port conflicts
       report(35, "Capturing screenshots...");
@@ -154,30 +268,36 @@ export class AuditEngine {
       );
 
       report(50, "Analyzing SEO...");
-      const seo = await this.seoScanner.run(context);
+      const { data: seo } = await this.runScanner("SEO Analysis", () => this.seoScanner.run(context), defaultSeo);
 
       report(60, "Checking social presence...");
-      const social = await this.socialScanner.run(context);
+      const { data: social } = await this.runScanner("Social Presence", () => this.socialScanner.run(context), defaultSocial);
 
       report(65, "Detecting technologies and platforms...");
-      const tech = await this.techScanner.run(context);
+      const { data: tech } = await this.runScanner("Technology Detection", () => this.techScanner.run(context), defaultTech);
 
       report(70, "Detecting advertising platforms...");
-      const advertising = await this.advertisingScanner.run(context);
+      const { data: advertising } = await this.runScanner("Advertising Detection", () => this.advertisingScanner.run(context), defaultAdvertising);
 
       report(75, "Checking e-commerce features...");
-      const ecommerce = await this.ecommerceScanner.run(context);
+      const { data: ecommerce } = await this.runScanner("E-commerce Detection", () => this.ecommerceScanner.run(context), defaultEcommerce);
 
       report(80, "Finding local business info...");
-      const local = await this.localScanner.run(context);
+      const { data: local } = await this.runScanner("Local Business Info", () => this.localScanner.run(context), defaultLocal);
 
       report(83, "Analyzing local presence...");
-      const localPresence = await this.localPresenceScanner.run(context);
+      const { data: localPresence } = await this.runScanner("Local Presence", () => this.localPresenceScanner.run(context), defaultLocalPresence);
 
       report(86, "Checking reviews...");
-      const reviews = await this.reviewsScanner.run(context);
+      const { data: reviews } = await this.runScanner("Reviews Check", () => this.reviewsScanner.run(context), defaultReviews);
 
       await page.close();
+
+      // Add any scanner errors to fundamentals issues
+      if (this.scannerErrors.length > 0) {
+        fundamentals.issues = [...fundamentals.issues, ...this.scannerErrors];
+        console.log(`[Engine] ${this.scannerErrors.length} scanner(s) failed, continuing with partial results`);
+      }
 
       report(92, "Calculating scores...");
 

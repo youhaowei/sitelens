@@ -208,7 +208,8 @@ export class LighthouseScanner implements Scanner<FundamentalsData> {
       opportunities: [],
       diagnostics: {},
       issues: [
-        createIssue("lighthouse_failed", {
+        createIssue("scanner_failed", {
+          title: "Lighthouse Audit Failed",
           description: `Lighthouse audit failed: ${error}`,
         }),
       ],

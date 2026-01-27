@@ -482,15 +482,15 @@ const ISSUE_TEMPLATES: Record<string, IssueTemplate> = {
     effort: "medium",
   },
 
-  lighthouse_failed: {
-    id: "lighthouse_failed",
-    title: "Performance Audit Failed",
-    description: "The Lighthouse performance audit could not be completed.",
+  scanner_failed: {
+    id: "scanner_failed",
+    title: "Audit Step Failed",
+    description: "An audit step could not be completed.",
     severity: "warning",
     category: "performance",
     recommendation:
-      "The performance audit timed out or encountered an error. This may be due to a slow-loading page, network issues, or the page blocking automated testing. Try running the audit again or check if the page is accessible.",
-    impact: "Performance scores and metrics are unavailable. Other audit results may still be valid.",
+      "This audit step timed out or encountered an error. This may be due to a slow-loading page, network issues, or the page blocking automated testing. Try running the audit again.",
+    impact: "Some audit data is unavailable. Other audit results are still valid.",
     effort: "low",
   },
 };
