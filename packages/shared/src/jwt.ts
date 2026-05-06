@@ -60,7 +60,12 @@ export async function verifyJwt<T = Record<string, unknown>>(
     throw new Error("Invalid token format");
   }
 
-  const [headerB64, payloadB64, signatureB64] = parts;
+  const headerB64 = parts[0];
+  const payloadB64 = parts[1];
+  const signatureB64 = parts[2];
+  if (headerB64 === undefined || payloadB64 === undefined || signatureB64 === undefined) {
+    throw new Error("Invalid token format");
+  }
   const message = `${headerB64}.${payloadB64}`;
 
   const key = await getKey(secret);
