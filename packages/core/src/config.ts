@@ -4,8 +4,8 @@ export const AuditConfigSchema = z.object({
   url: z.string().min(1, "URL is required"),
   output: z.string().default("./reports"),
   format: z
-    .array(z.enum(["json", "html", "pdf"]))
-    .default(["json"]),
+    .array(z.enum(["sitelens", "json", "html", "pdf"]))
+    .default(["sitelens"]),
   device: z.enum(["mobile", "desktop", "both"]).default("both"),
   timeout: z.number().default(60000),
   deep: z.boolean().default(false),

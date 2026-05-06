@@ -1,6 +1,8 @@
 # Sitelens
 
-Open-source website auditing CLI. Analyze performance, SEO, security, accessibility, and more.
+Open-source website auditing CLI and artifact format. Analyze performance, SEO,
+security, accessibility, and more, then package the result as a portable
+`.sitelens` file.
 
 ## Installation
 
@@ -20,10 +22,13 @@ sitelens https://example.com
 sitelens https://example.com
 
 # With options
-sitelens https://example.com --output ./my-reports --format json,html
+sitelens https://example.com --output ./my-reports --format sitelens,json
 
 # Using the audit subcommand
 sitelens audit https://example.com --deep --timeout 120000
+
+# Inspect and validate a saved artifact
+sitelens inspect ./reports/<report-id>.sitelens
 ```
 
 ### Options
@@ -31,7 +36,7 @@ sitelens audit https://example.com --deep --timeout 120000
 | Option | Description | Default |
 |--------|-------------|---------|
 | `-o, --output <path>` | Output directory | `./reports` |
-| `-f, --format <formats>` | Output formats (json, html, pdf) | `json` |
+| `-f, --format <formats>` | Output formats (sitelens, json) | `sitelens` |
 | `-d, --device <device>` | Device emulation (mobile, desktop, both) | `both` |
 | `--deep` | Enable deep link checking | `false` |
 | `--timeout <ms>` | Timeout in milliseconds | `60000` |
@@ -74,6 +79,14 @@ sitelens audit https://example.com --deep --timeout 120000
 | `sitelens` | CLI tool |
 | `@sitelens/core` | Audit engine (use programmatically) |
 | `@sitelens/shared` | Shared TypeScript types |
+
+## Artifact Boundary
+
+The OSS project owns the `.sitelens` artifact: manifest, deterministic audit
+data, scores, suggestions, evidence, screenshots/assets, validation, and
+inspection. Report presentation is intentionally left to consumers. The private
+Sitelens app is one hosted interpretation of the artifact, with workspaces,
+billing, AI, connectors, branded rendering, sharing, history, and alerts.
 
 ### Programmatic Usage
 

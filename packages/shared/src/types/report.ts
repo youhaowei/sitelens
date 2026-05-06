@@ -924,6 +924,51 @@ export interface NewAuditResult {
 }
 
 // ============================================
+// SITELENS ARTIFACT - portable report container
+// ============================================
+
+export type SitelensArtifactKind = "sitelens.report";
+export type SitelensArtifactVersion = 1;
+
+export interface SitelensArtifactGenerator {
+  name: string;
+  version: string;
+}
+
+export interface SitelensArtifactManifest {
+  kind: SitelensArtifactKind;
+  version: SitelensArtifactVersion;
+  createdAt: string;
+  generator: SitelensArtifactGenerator;
+  audit: {
+    id: string;
+    url: string;
+    status: AuditStatus;
+    createdAt: string;
+    completedAt?: string;
+  };
+  assets: Array<{
+    path: string;
+    mediaType: string;
+    byteLength: number;
+  }>;
+  extensions: Record<string, unknown>;
+}
+
+export interface SitelensArtifactAsset {
+  path: string;
+  mediaType: string;
+  byteLength: number;
+  bytes: Uint8Array;
+}
+
+export interface SitelensArtifact {
+  manifest: SitelensArtifactManifest;
+  report: NewAuditResult;
+  assets: SitelensArtifactAsset[];
+}
+
+// ============================================
 // MAIN REPORT
 // ============================================
 

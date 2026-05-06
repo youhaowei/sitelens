@@ -1,4 +1,11 @@
-import { validateConfig, runAudit } from "@sitelens/core";
+import {
+  createNewAuditResult,
+  createSitelensArtifact,
+  runAudit,
+  serializeSitelensArtifact,
+  validateConfig,
+} from "@sitelens/core";
+import type { NewAuditResult } from "@sitelens/shared/types";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -32,24 +39,61 @@ export async function auditCommand(url: string, options: AuditOptions) {
 
     console.log("\n");
 
-    printScores(result.scores);
+    printScores(result.newScores);
     printSummary(result);
 
     await mkdir(config.output, { recursive: true });
 
     const reportId = crypto.randomUUID();
+    const completedAt = new Date().toISOString();
+    const baseReport = createNewAuditResult(
+      reportId,
+      url,
+      result.newScores,
+      result.scoreBreakdowns,
+      result.facts,
+      result.suggestions,
+      result.screenshots,
+      completedAt
+    );
+    const report: NewAuditResult = {
+      ...baseReport,
+      assets: {
+        screenshots: baseReport.assets.screenshots.map((screenshot) => ({
+          ...screenshot,
+          path: getScreenshotArtifactPath(screenshot.name),
+        })),
+      },
+    };
+
+    const unsupportedFormats = config.format.filter(
+      (format) => format !== "sitelens" && format !== "json"
+    );
+    for (const format of unsupportedFormats) {
+      console.warn(`⚠️  ${format.toUpperCase()} output is not implemented yet; skipping.`);
+    }
+
+    if (config.format.includes("sitelens")) {
+      const artifactPath = join(config.output, `${reportId}.sitelens`);
+      const artifact = createSitelensArtifact(
+        report,
+        result.screenshots.map((screenshot) => ({
+          path: getScreenshotArtifactPath(screenshot.name),
+          mediaType: "image/png",
+          bytes: screenshot.buffer,
+        })),
+        {
+          name: "sitelens-cli",
+          version: "0.1.0",
+        }
+      );
+      await Bun.write(artifactPath, serializeSitelensArtifact(artifact));
+      console.log(`📦 Sitelens artifact saved: ${artifactPath}`);
+    }
 
     if (config.format.includes("json")) {
       const jsonPath = join(config.output, `${reportId}.json`);
-      const report = {
-        id: reportId,
-        url,
-        status: "completed" as const,
-        createdAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
-        ...result,
-      };
-      await Bun.write(jsonPath, JSON.stringify(report, null, 2));
+      await Bun.write(jsonPath, `${JSON.stringify(toJsonReport(report), null, 2)}\n`);
       console.log(`📄 JSON report saved: ${jsonPath}`);
     }
 
@@ -74,16 +118,20 @@ function createProgressBar(progress: number): string {
 }
 
 function printScores(scores: {
+  overall: number;
   performance: number;
-  seo: number;
-  social: number;
+  visibility: number;
+  security: number;
   accessibility: number;
+  trust: number;
 }) {
   console.log("📊 Scores:");
+  console.log("  ├─ Overall:       " + formatScore(scores.overall));
   console.log("  ├─ Performance:   " + formatScore(scores.performance));
-  console.log("  ├─ SEO:           " + formatScore(scores.seo));
-  console.log("  ├─ Social:        " + formatScore(scores.social));
-  console.log("  └─ Accessibility: " + formatScore(scores.accessibility));
+  console.log("  ├─ Visibility:    " + formatScore(scores.visibility));
+  console.log("  ├─ Security:      " + formatScore(scores.security));
+  console.log("  ├─ Accessibility: " + formatScore(scores.accessibility));
+  console.log("  └─ Trust:         " + formatScore(scores.trust));
   console.log();
 }
 
@@ -95,7 +143,7 @@ function formatScore(score: number): string {
 }
 
 function printSummary(result: Awaited<ReturnType<typeof runAudit>>) {
-  const { seo, social, tech } = result.details;
+  const { seo, social, tech } = result.legacy.details;
 
   console.log("📝 Summary:");
 
@@ -136,4 +184,12 @@ function printSummary(result: Awaited<ReturnType<typeof runAudit>>) {
       Object.keys(social.profiles).join(", ")
     );
   }
+}
+
+function getScreenshotArtifactPath(name: string): string {
+  return `assets/screenshots/${name}.png`;
+}
+
+function toJsonReport(report: NewAuditResult): NewAuditResult {
+  return report;
 }
