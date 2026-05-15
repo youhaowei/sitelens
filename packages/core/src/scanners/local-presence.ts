@@ -11,7 +11,7 @@ import { createIssue } from "../recommendations";
 const PHONE_REGEX = /(?:\+?1[-.\s]?)?\(?[2-9]\d{2}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g;
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 const ADDRESS_REGEX =
-  /\d+\s+[\w\s]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Place|Pl)\.?(?:\s*#?\d+)?(?:,\s*[\w\s]+)?(?:,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?)?/gi;
+  /(?:^|\s)(\d+\s+[\w\s]+?\b(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Place|Pl)\.?\b(?:\s*#?\d+)?,?\s+[A-Za-z][A-Za-z\s]+,?\s+[A-Z]{2}\s+\d{5}(?:-\d{4})?|\d+\s+[\w\s]+?\b(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Place|Pl)\.?\b(?:\s*#?\d+)?)/gi;
 
 const DIRECTORIES = [
   { name: "Yelp", domain: "yelp.com" },
@@ -37,11 +37,11 @@ export class LocalPresenceScanner implements Scanner<LocalPresenceData> {
     const issues: AuditIssue[] = [];
 
     $("script, style, noscript").remove();
-    const textContent = $("body").text();
+    const textContent = this.getReadableText($);
 
-    const phones = this.extractUnique(textContent.match(PHONE_REGEX) || []);
-    const emails = this.extractUnique(textContent.match(EMAIL_REGEX) || []);
-    const addresses = this.extractUnique(textContent.match(ADDRESS_REGEX) || []);
+    const phones = this.extractPhones($, textContent);
+    const emails = this.extractEmails($, textContent);
+    const addresses = this.extractAddresses(textContent);
 
     const businessName = this.extractBusinessName($, context.url);
     const googleBusinessProfile = await this.detectGoogleBusinessProfile($);
@@ -106,6 +106,24 @@ export class LocalPresenceScanner implements Scanner<LocalPresenceData> {
       );
     }
 
+    if (phones.length > 0 || emails.length > 0 || addresses.length > 0) {
+      const contactPage = await this.checkContactPage(context.url);
+      if (!contactPage.exists) {
+        issues.push(
+          createIssue("missing_contact_page", {
+            id: "missing_contact_page",
+            title: "Contact Page Not Found",
+            description: `The site has contact information, but ${contactPage.url} returned HTTP ${contactPage.statusCode}.`,
+            severity: "warning",
+            category: "local",
+            recommendation: "Add a working /contact page or redirect /contact to the active contact section.",
+            impact: "Visitors often try the standard /contact URL directly. A 404 there can lose high-intent leads.",
+            effort: "low",
+          })
+        );
+      }
+    }
+
     if (!napConsistency.consistent) {
       issues.push(
         createIssue("nap_inconsistent", {
@@ -157,6 +175,105 @@ export class LocalPresenceScanner implements Scanner<LocalPresenceData> {
     return [...new Set(cleaned)];
   }
 
+  private getReadableText($: cheerio.CheerioAPI): string {
+    return $("body")
+      .find("*")
+      .contents()
+      .toArray()
+      .map((node) => (node.type === "text" ? node.data.trim() : ""))
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  private extractPhones($: cheerio.CheerioAPI, textContent: string): string[] {
+    const phones: string[] = [];
+
+    $('a[href^="tel:"]').each((_, el) => {
+      const href = $(el).attr("href") || "";
+      const text = $(el).text().trim();
+      const phone = this.formatPhone(text || href.replace(/^tel:/i, ""));
+      if (phone) phones.push(phone);
+    });
+
+    for (const match of textContent.match(PHONE_REGEX) || []) {
+      const phone = this.formatPhone(match);
+      if (phone) phones.push(phone);
+    }
+
+    return this.extractUniqueBy(phones, (phone) => this.normalizePhone(phone));
+  }
+
+  private extractEmails($: cheerio.CheerioAPI, textContent: string): string[] {
+    const emails: string[] = [];
+    const linkedEmails: string[] = [];
+
+    $('a[href^="mailto:"]').each((_, el) => {
+      const href = $(el).attr("href") || "";
+      const text = $(el).text().trim();
+      const email = this.cleanEmail(text || href.replace(/^mailto:/i, ""));
+      if (email) {
+        emails.push(email);
+        linkedEmails.push(email);
+      }
+    });
+
+    for (const match of textContent.match(EMAIL_REGEX) || []) {
+      const email = this.cleanEmail(match);
+      if (email && !linkedEmails.some((linkedEmail) => email.endsWith(linkedEmail))) {
+        emails.push(email);
+      }
+    }
+
+    return this.extractUniqueBy(emails, (email) => email.toLowerCase());
+  }
+
+  private extractAddresses(textContent: string): string[] {
+    const addresses: string[] = [];
+    for (const match of textContent.matchAll(ADDRESS_REGEX)) {
+      const address = this.normalizeAddress(match[1] || "");
+      if (address) addresses.push(address);
+    }
+    return this.extractUnique(addresses);
+  }
+
+  private normalizeAddress(value: string): string | null {
+    const address = value.trim().replace(/\s+/g, " ").replace(/\s+,/g, ",");
+    if (!address) return null;
+
+    return address
+      .replace(
+        /\b(Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Drive|Dr|Lane|Ln|Way|Court|Ct|Place|Pl)\.?\s+([A-Z][A-Za-z\s]+),?\s+([A-Z]{2}\s+\d{5}(?:-\d{4})?)$/i,
+        (_match, streetType, city, stateZip) => `${streetType}, ${String(city).trim()}, ${stateZip}`
+      )
+      .trim();
+  }
+
+  private extractUniqueBy(values: string[], getKey: (value: string) => string): string[] {
+    const seen = new Set<string>();
+    const unique: string[] = [];
+
+    for (const value of values) {
+      const key = getKey(value);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      unique.push(value);
+    }
+
+    return unique;
+  }
+
+  private cleanEmail(value: string): string | null {
+    const email = (value.split("?")[0]?.trim() ?? "").replace(/^email/i, "");
+    return email.match(EMAIL_REGEX)?.[0] === email ? email : null;
+  }
+
+  private formatPhone(value: string): string | null {
+    const digits = this.normalizePhone(value);
+    const localDigits = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+    if (localDigits.length !== 10) return null;
+    return `(${localDigits.slice(0, 3)}) ${localDigits.slice(3, 6)}-${localDigits.slice(6)}`;
+  }
+
   private extractBusinessName($: cheerio.CheerioAPI, url: string): string | null {
     const schemaScripts = $('script[type="application/ld+json"]');
     for (let i = 0; i < schemaScripts.length; i++) {
@@ -179,12 +296,29 @@ export class LocalPresenceScanner implements Scanner<LocalPresenceData> {
     const ogSiteName = $('meta[property="og:site_name"]').attr("content");
     if (ogSiteName) return ogSiteName;
 
+    const titleName = this.extractNameFromTitle($("title").text());
+    if (titleName) return titleName;
+
+    const logoAlt = $('a[href="/"] img[alt], header img[alt], footer img[alt]')
+      .first()
+      .attr("alt")
+      ?.trim();
+    if (logoAlt) return logoAlt;
+
     try {
       const domain = new URL(url).hostname.replace(/^www\./, "");
       return domain.split(".")[0] || null;
     } catch {
       return null;
     }
+  }
+
+  private extractNameFromTitle(title: string): string | null {
+    const name = title
+      .split(/\s+[|–—-]\s+/)[0]
+      ?.replace(/\s+/g, " ")
+      .trim();
+    return name || null;
   }
 
   private async detectGoogleBusinessProfile($: cheerio.CheerioAPI) {
@@ -282,6 +416,34 @@ export class LocalPresenceScanner implements Scanner<LocalPresenceData> {
     }
 
     return result;
+  }
+
+  private async checkContactPage(baseUrl: string): Promise<{
+    exists: boolean;
+    url: string;
+    statusCode: number;
+  }> {
+    const url = new URL("/contact", baseUrl).href;
+
+    try {
+      const response = await fetch(url, {
+        method: "HEAD",
+        redirect: "follow",
+        signal: AbortSignal.timeout(5000),
+      });
+
+      return {
+        exists: response.status < 400,
+        url,
+        statusCode: response.status,
+      };
+    } catch {
+      return {
+        exists: true,
+        url,
+        statusCode: 0,
+      };
+    }
   }
 
   private detectDirectoryListings($: cheerio.CheerioAPI): DirectoryListing[] {

@@ -418,6 +418,7 @@ export class SeoScanner implements Scanner<SeoData> {
     const internal: string[] = [];
     const external: string[] = [];
     const nofollow: string[] = [];
+    const linkSources = new Map<string, { href: string; anchorText?: string }>();
     const baseHost = new URL(baseUrl).hostname;
 
     $("a[href]").each((_, el) => {
@@ -429,8 +430,17 @@ export class SeoScanner implements Scanner<SeoData> {
       }
 
       try {
-        const absoluteUrl = new URL(href, baseUrl).href;
-        const linkHost = new URL(absoluteUrl).hostname;
+        const url = new URL(href, baseUrl);
+        if (url.protocol !== "http:" && url.protocol !== "https:") {
+          return;
+        }
+
+        const absoluteUrl = url.href;
+        const linkHost = url.hostname;
+        linkSources.set(absoluteUrl, {
+          href,
+          anchorText: $(el).text().trim() || undefined,
+        });
 
         if (rel.includes("nofollow")) {
           nofollow.push(absoluteUrl);
@@ -452,7 +462,7 @@ export class SeoScanner implements Scanner<SeoData> {
     const broken: BrokenLink[] = await this.checkBrokenLinks(
       [...internal, ...external].slice(0, 50),
       baseUrl,
-      $,
+      linkSources,
       context
     );
 
@@ -476,7 +486,7 @@ export class SeoScanner implements Scanner<SeoData> {
   private async checkBrokenLinks(
     urls: string[],
     pageUrl: string,
-    $: cheerio.CheerioAPI,
+    linkSources: Map<string, { href: string; anchorText?: string }>,
     context: ScannerContext
   ): Promise<BrokenLink[]> {
     context.onProgress?.("Checking for broken links...");
@@ -496,13 +506,13 @@ export class SeoScanner implements Scanner<SeoData> {
         clearTimeout(timeout);
 
         if (response.status >= 400) {
-          const anchorEl = $(`a[href="${url}"], a[href^="${url}"]`);
+          const source = linkSources.get(url);
           broken.push({
             url,
             statusCode: response.status,
             statusText: response.statusText,
             foundOn: pageUrl,
-            anchorText: anchorEl.first().text().trim() || undefined,
+            anchorText: source?.anchorText,
           });
         }
       } catch (error) {

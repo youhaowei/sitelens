@@ -24,6 +24,10 @@ function createHtml(body: string): string {
   return `<!DOCTYPE html><html><head></head><body>${body}</body></html>`;
 }
 
+function createHtmlWithHead(body: string, head: string): string {
+  return `<!DOCTYPE html><html><head>${head}</head><body>${body}</body></html>`;
+}
+
 function createMockContext(html: string): ScannerContext {
   return {
     url: "https://example.com",
@@ -135,15 +139,70 @@ describe("LocalPresenceScanner", () => {
 
   describe("other local presence features", () => {
     test("detects phone numbers", async () => {
+      globalThis.fetch = mockFetch({ status: 200 });
       const html = createHtml(`<p>Call us: (555) 123-4567</p>`);
       const result = await scanner.run(createMockContext(html));
       expect(result.phones.length).toBeGreaterThan(0);
     });
 
     test("detects email addresses", async () => {
+      globalThis.fetch = mockFetch({ status: 200 });
       const html = createHtml(`<p>Email: contact@example.com</p>`);
       const result = await scanner.run(createMockContext(html));
       expect(result.emails).toContain("contact@example.com");
+    });
+
+    test("prefers contact links and does not over-capture adjacent labels", async () => {
+      globalThis.fetch = mockFetch({ status: 200 });
+      const html = createHtml(`
+        <a href="tel:5203728575">(520) 372-8575</a><span>Email</span><a href="mailto:frontdesk@hopespringswc.com">frontdesk@hopespringswc.com</a><span>Hours</span>
+        <a href="tel:15203728575">1(520) 372-8575</a>
+      `);
+
+      const result = await scanner.run(createMockContext(html));
+
+      expect(result.phones).toEqual(["(520) 372-8575"]);
+      expect(result.emails).toEqual(["frontdesk@hopespringswc.com"]);
+    });
+
+    test("does not turn phone-adjacent marketing text into an address", async () => {
+      globalThis.fetch = mockFetch({ status: 200 });
+      const html = createHtml(`
+        <a href="tel:5203728575">(520) 372-8575</a>
+        <p>Hope Springs Wellness Center. Hope starts here!</p>
+        <span>5650 E 22nd Street</span><span>Tucson, AZ 85711</span>
+      `);
+
+      const result = await scanner.run(createMockContext(html));
+
+      expect(result.addresses).toEqual(["5650 E 22nd Street, Tucson, AZ 85711"]);
+      expect(result.addresses).not.toContain("8575 Hope Springs Wellness Center Hope st");
+    });
+
+    test("uses page title before domain fallback for business name", async () => {
+      const html = createHtmlWithHead(
+        `<a href="tel:5203728575">(520) 372-8575</a>`,
+        `<title>Hope Springs Wellness Center | Psychiatric Care in Tucson, AZ</title>`
+      );
+
+      const result = await scanner.run(createMockContext(html));
+
+      expect(result.businessName).toBe("Hope Springs Wellness Center");
+    });
+
+    test("reports a missing standard contact page when contact details exist", async () => {
+      globalThis.fetch = mockFetch({ status: 404 });
+      const html = createHtml(`<a href="tel:5203728575">(520) 372-8575</a>`);
+
+      const result = await scanner.run(createMockContext(html));
+
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          id: "missing_contact_page",
+          title: "Contact Page Not Found",
+          description: "The site has contact information, but https://example.com/contact returned HTTP 404.",
+        })
+      );
     });
 
     test("detects directory listings", async () => {

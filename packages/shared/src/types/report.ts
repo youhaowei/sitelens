@@ -1,3 +1,5 @@
+import type { ScoreCategory } from "../report-schema";
+
 // Severity levels for issues
 export type IssueSeverity = "critical" | "warning" | "info" | "success";
 
@@ -676,14 +678,6 @@ export interface Screenshots {
 // NEW ARCHITECTURE: Facts / Scores / Suggestions
 // ============================================
 
-// Score category type for the new 5-category system
-export type ScoreCategory =
-  | "performance"
-  | "visibility"
-  | "security"
-  | "accessibility"
-  | "trust";
-
 // ============================================
 // FACTS - Raw scanner findings (no judgment)
 // ============================================
@@ -921,51 +915,6 @@ export interface NewAuditResult {
 
   // Asset references (paths, not blobs)
   assets: AssetReferences;
-}
-
-// ============================================
-// SITELENS ARTIFACT - portable report container
-// ============================================
-
-export type SitelensArtifactKind = "sitelens.report";
-export type SitelensArtifactVersion = 1;
-
-export interface SitelensArtifactGenerator {
-  name: string;
-  version: string;
-}
-
-export interface SitelensArtifactManifest {
-  kind: SitelensArtifactKind;
-  version: SitelensArtifactVersion;
-  createdAt: string;
-  generator: SitelensArtifactGenerator;
-  audit: {
-    id: string;
-    url: string;
-    status: AuditStatus;
-    createdAt: string;
-    completedAt?: string;
-  };
-  assets: Array<{
-    path: string;
-    mediaType: string;
-    byteLength: number;
-  }>;
-  extensions: Record<string, unknown>;
-}
-
-export interface SitelensArtifactAsset {
-  path: string;
-  mediaType: string;
-  byteLength: number;
-  bytes: Uint8Array;
-}
-
-export interface SitelensArtifact {
-  manifest: SitelensArtifactManifest;
-  report: NewAuditResult;
-  assets: SitelensArtifactAsset[];
 }
 
 // ============================================

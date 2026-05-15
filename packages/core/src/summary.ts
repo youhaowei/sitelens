@@ -2084,6 +2084,25 @@ export function generateNewSuggestions(
     });
   }
 
+  const missingContactPage = report.details?.localPresence?.issues?.find(
+    (issue) => issue.id === "missing_contact_page"
+  );
+  if (missingContactPage) {
+    suggestions.push({
+      id: "local-contact-page",
+      title: "Fix the /contact page",
+      description: missingContactPage.description,
+      category: "visibility",
+      impact: "medium",
+      effort: "low",
+      scoreImprovement: [{ category: "visibility", points: 4 }],
+      relatedFact: "presence.contactPage",
+      howToFix:
+        missingContactPage.recommendation ||
+        "Add a working /contact page or redirect /contact to your active contact section.",
+    });
+  }
+
   // Security suggestions
   const security = report.details?.tech?.security;
   if (!security?.isHTTPS) {

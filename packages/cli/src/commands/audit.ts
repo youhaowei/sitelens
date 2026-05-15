@@ -1,4 +1,5 @@
 import {
+  buildSitelensReport,
   createNewAuditResult,
   createSitelensArtifact,
   runAudit,
@@ -75,17 +76,23 @@ export async function auditCommand(url: string, options: AuditOptions) {
 
     if (config.format.includes("sitelens")) {
       const artifactPath = join(config.output, `${reportId}.sitelens`);
+      const sitelensReport = buildSitelensReport({
+        id: report.id,
+        url: report.url,
+        generatedAt: completedAt,
+        scores: report.scores,
+        scoreBreakdowns: report.scoreBreakdowns,
+        facts: report.facts,
+        suggestions: report.suggestions,
+        assets: report.assets,
+      });
       const artifact = createSitelensArtifact(
-        report,
+        sitelensReport,
         result.screenshots.map((screenshot) => ({
           path: getScreenshotArtifactPath(screenshot.name),
           mediaType: "image/png",
           bytes: screenshot.buffer,
-        })),
-        {
-          name: "sitelens-cli",
-          version: "0.1.0",
-        }
+        }))
       );
       await Bun.write(artifactPath, serializeSitelensArtifact(artifact));
       console.log(`📦 Sitelens artifact saved: ${artifactPath}`);

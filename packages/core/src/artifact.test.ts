@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { NewAuditResult } from "@sitelens/shared/types";
+import type { SitelensReport } from "@sitelens/shared/types";
 import {
   createSitelensArtifact,
   parseSitelensArtifact,
@@ -7,13 +7,21 @@ import {
   validateSitelensArtifact,
 } from "./artifact";
 
-function makeReport(): NewAuditResult {
+function makeReport(): SitelensReport {
   return {
-    id: "report-123",
-    url: "https://example.com",
-    status: "completed",
-    createdAt: "2026-05-05T12:00:00.000Z",
-    completedAt: "2026-05-05T12:00:05.000Z",
+    metadata: {
+      id: "report-123",
+      url: "https://example.com",
+      generatedAt: "2026-05-05T12:00:05.000Z",
+    },
+    pages: [
+      {
+        id: "page:home",
+        url: "https://example.com",
+        role: "primary",
+        screenshotRefs: ["assets/screenshots/desktop.png"],
+      },
+    ],
     scores: {
       overall: 80,
       performance: 75,
@@ -22,19 +30,76 @@ function makeReport(): NewAuditResult {
       accessibility: 70,
       trust: 84,
     },
-    scoreBreakdowns: {
-      performance: {} as NewAuditResult["scoreBreakdowns"]["performance"],
-      visibility: {} as NewAuditResult["scoreBreakdowns"]["visibility"],
-      security: {} as NewAuditResult["scoreBreakdowns"]["security"],
-      accessibility: {} as NewAuditResult["scoreBreakdowns"]["accessibility"],
-      trust: {} as NewAuditResult["scoreBreakdowns"]["trust"],
-    },
-    facts: {} as NewAuditResult["facts"],
-    suggestions: {
-      quickWins: [],
-      priorityFixes: [],
-      niceToHave: [],
-    },
+    categories: [
+      {
+        key: "performance",
+        label: "Performance",
+        score: 75,
+        summary: "Page speed, loading time, and runtime efficiency",
+        findingRefs: ["f:performance:lcp"],
+      },
+      {
+        key: "visibility",
+        label: "Findability",
+        score: 82,
+        summary: "SEO and local visibility",
+        findingRefs: [],
+      },
+      {
+        key: "security",
+        label: "Security",
+        score: 90,
+        summary: "HTTPS, headers, and security best practices",
+        findingRefs: [],
+      },
+      {
+        key: "accessibility",
+        label: "Accessibility",
+        score: 70,
+        summary: "Assistive technology and usability",
+        findingRefs: [],
+      },
+      {
+        key: "trust",
+        label: "Credibility",
+        score: 84,
+        summary: "Contact info, reviews, and trust signals",
+        findingRefs: [],
+      },
+    ],
+    findings: [
+      {
+        id: "f:performance:lcp",
+        category: "performance",
+        title: "Largest Contentful Paint is slow",
+        summary: "The main content takes too long to appear.",
+        severity: "warning",
+        impact: "high",
+        effort: "medium",
+        rank: 0,
+        categoryRank: 0,
+        evidenceRefs: ["e:lcp"],
+        fix: "Optimize the largest above-the-fold asset.",
+        source: {
+          type: "scanner",
+          ruleId: "lcp",
+        },
+      },
+    ],
+    evidence: [
+      {
+        id: "e:lcp",
+        type: "metric",
+        source: "lighthouse",
+        label: "Largest Contentful Paint",
+        pageRef: "page:home",
+        metric: {
+          key: "lcp",
+          value: 4200,
+          unit: "ms",
+        },
+      },
+    ],
     assets: {
       screenshots: [
         {
@@ -45,6 +110,7 @@ function makeReport(): NewAuditResult {
         },
       ],
     },
+    extensions: [],
   };
 }
 
@@ -59,9 +125,8 @@ describe("Sitelens artifact", () => {
       },
     ]);
 
-    expect(artifact.manifest.kind).toBe("sitelens.report");
-    expect(artifact.manifest.version).toBe(1);
-    expect(artifact.manifest.audit.id).toBe(report.id);
+    expect(artifact.manifest.schema).toBe("sitelens.report");
+    expect(artifact.manifest.schemaVersion).toBe("0.2.0");
     expect(artifact.manifest.assets).toEqual([
       {
         path: "assets/screenshots/desktop.png",

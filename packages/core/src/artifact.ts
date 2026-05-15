@@ -1,12 +1,16 @@
 import type {
-  NewAuditResult,
   SitelensArtifact,
   SitelensArtifactAsset,
-  SitelensArtifactGenerator,
+  SitelensExtension,
+  SitelensReport,
 } from "@sitelens/shared/types";
+import {
+  SITELENS_ARTIFACT_SCHEMA,
+  SITELENS_SCHEMA_VERSION,
+  sitelensArtifactSchema,
+} from "@sitelens/shared";
 
-export const SITELENS_ARTIFACT_VERSION = 1;
-export const SITELENS_ARTIFACT_KIND = "sitelens.report";
+export { SITELENS_ARTIFACT_SCHEMA, SITELENS_SCHEMA_VERSION };
 
 const MANIFEST_PATH = "manifest.json";
 const REPORT_PATH = "report.json";
@@ -31,42 +35,32 @@ interface ParsedZipEntry extends ZipEntry {
   uncompressedSize: number;
 }
 
-const DEFAULT_GENERATOR: SitelensArtifactGenerator = {
-  name: "sitelens-core",
-  version: "0.1.0",
-};
-
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
 export function createSitelensArtifact(
-  report: NewAuditResult,
+  report: SitelensReport,
   assets: CreateArtifactAssetInput[],
-  generator: SitelensArtifactGenerator = DEFAULT_GENERATOR
+  extensions: SitelensExtension[] = report.extensions
 ): SitelensArtifact {
   const artifactAssets = assets.map(createArtifactAsset);
 
   return {
     manifest: {
-      kind: SITELENS_ARTIFACT_KIND,
-      version: SITELENS_ARTIFACT_VERSION,
-      createdAt: new Date().toISOString(),
-      generator,
-      audit: {
-        id: report.id,
-        url: report.url,
-        status: report.status,
-        createdAt: report.createdAt,
-        completedAt: report.completedAt,
-      },
+      schema: SITELENS_ARTIFACT_SCHEMA,
+      schemaVersion: SITELENS_SCHEMA_VERSION,
+      versionedAt: new Date().toISOString(),
       assets: artifactAssets.map(({ path, mediaType, byteLength }) => ({
         path,
         mediaType,
         byteLength,
       })),
-      extensions: {},
+      extensions,
     },
-    report,
+    report: {
+      ...report,
+      extensions,
+    },
     assets: artifactAssets,
   };
 }
@@ -119,7 +113,7 @@ export function parseSitelensArtifact(
   }
 
   const manifest = JSON.parse(textDecoder.decode(manifestEntry.bytes)) as SitelensArtifact["manifest"];
-  const report = JSON.parse(textDecoder.decode(reportEntry.bytes)) as NewAuditResult;
+  const report = JSON.parse(textDecoder.decode(reportEntry.bytes)) as SitelensReport;
   const assets = manifest.assets.map((asset): SitelensArtifactAsset => {
     const entry = entriesByPath.get(asset.path);
     if (!entry) {
@@ -130,7 +124,7 @@ export function parseSitelensArtifact(
     }
     return {
       ...asset,
-      bytes: entry.bytes,
+      bytes: new Uint8Array(entry.bytes),
     };
   });
 
@@ -150,8 +144,18 @@ export function parseSitelensArtifact(
 export function validateSitelensArtifact(value: unknown): string[] {
   const errors: string[] = [];
 
+  const parsed = sitelensArtifactSchema.safeParse(value);
+  if (!parsed.success) {
+    errors.push(
+      ...parsed.error.issues.map((issue) => {
+        const path = issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
+        return `${path}${issue.message}`;
+      })
+    );
+  }
+
   if (!isRecord(value)) {
-    return ["Artifact must be an object"];
+    return errors.length > 0 ? errors : ["Artifact must be an object"];
   }
 
   const manifest = value.manifest;
@@ -159,39 +163,18 @@ export function validateSitelensArtifact(value: unknown): string[] {
   const assets = value.assets;
 
   if (!isRecord(manifest)) {
-    errors.push("Manifest must be an object");
+    if (!errors.includes("Manifest must be an object")) {
+      errors.push("Manifest must be an object");
+    }
   } else {
-    if (manifest.kind !== SITELENS_ARTIFACT_KIND) {
-      errors.push(`Manifest kind must be ${SITELENS_ARTIFACT_KIND}`);
-    }
-    if (manifest.version !== SITELENS_ARTIFACT_VERSION) {
-      errors.push(`Manifest version must be ${SITELENS_ARTIFACT_VERSION}`);
-    }
-    if (typeof manifest.createdAt !== "string") {
-      errors.push("Manifest createdAt must be a string");
-    }
-    if (!isRecord(manifest.audit)) {
-      errors.push("Manifest audit must be an object");
-    }
-    if (!Array.isArray(manifest.assets)) {
-      errors.push("Manifest assets must be an array");
-    }
-    if (!isRecord(manifest.extensions)) {
-      errors.push("Manifest extensions must be an object");
+    if (manifest.schemaVersion !== SITELENS_SCHEMA_VERSION) {
+      errors.push(`Manifest schemaVersion must be ${SITELENS_SCHEMA_VERSION}`);
     }
   }
 
   if (!isRecord(report)) {
-    errors.push("Report must be an object");
-  } else {
-    if (typeof report.id !== "string") {
-      errors.push("Report id must be a string");
-    }
-    if (typeof report.url !== "string") {
-      errors.push("Report url must be a string");
-    }
-    if (!isRecord(report.assets)) {
-      errors.push("Report assets must be an object");
+    if (!errors.includes("Report must be an object")) {
+      errors.push("Report must be an object");
     }
   }
 
@@ -259,7 +242,7 @@ function createArtifactAsset(input: CreateArtifactAssetInput): SitelensArtifactA
     path: input.path,
     mediaType: input.mediaType,
     byteLength: bytes.byteLength,
-    bytes,
+    bytes: new Uint8Array(bytes),
   };
 }
 

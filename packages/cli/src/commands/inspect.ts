@@ -16,16 +16,14 @@ export async function inspectCommand(path: string): Promise<void> {
 
     const { manifest, report, assets } = artifact;
     console.log("📦 Sitelens Artifact");
-    console.log(`  Kind:       ${manifest.kind}`);
-    console.log(`  Version:    ${manifest.version}`);
-    console.log(`  Created:    ${manifest.createdAt}`);
-    console.log(`  Generator:  ${manifest.generator.name}@${manifest.generator.version}`);
+    console.log(`  Schema:     ${manifest.schema}`);
+    console.log(`  Version:    ${manifest.schemaVersion}`);
+    console.log(`  Versioned:  ${manifest.versionedAt}`);
     console.log();
-    console.log("🔍 Audit");
-    console.log(`  ID:         ${report.id}`);
-    console.log(`  URL:        ${report.url}`);
-    console.log(`  Status:     ${report.status}`);
-    console.log(`  Completed:  ${report.completedAt ?? "not completed"}`);
+    console.log("🔍 Report");
+    console.log(`  ID:         ${report.metadata.id}`);
+    console.log(`  URL:        ${report.metadata.url}`);
+    console.log(`  Generated:  ${report.metadata.generatedAt}`);
     console.log();
     console.log("📊 Scores");
     console.log(`  Overall:       ${report.scores.overall}`);
@@ -37,7 +35,10 @@ export async function inspectCommand(path: string): Promise<void> {
     console.log();
     console.log("🧩 Contents");
     console.log(`  Assets:      ${assets.length}`);
-    console.log(`  Extensions:  ${Object.keys(manifest.extensions).length}`);
+    console.log(`  Pages:       ${report.pages.length}`);
+    console.log(`  Findings:    ${report.findings.length}`);
+    console.log(`  Evidence:    ${report.evidence.length}`);
+    console.log(`  Extensions:  ${manifest.extensions.length}`);
   } catch (error) {
     console.error(
       "❌ Failed to inspect artifact:",
